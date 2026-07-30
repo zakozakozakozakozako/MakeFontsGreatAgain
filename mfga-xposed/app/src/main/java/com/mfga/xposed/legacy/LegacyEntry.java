@@ -18,14 +18,14 @@ public class LegacyEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "MFGA";
     private static final java.util.Set<String> TARGET_PACKAGES = new java.util.HashSet<>(
-            java.util.Arrays.asList("com.github.android", "com.twitter.android", "org.telegram.messenger", "xyz.nextalone.nagram"));
+            java.util.Arrays.asList("com.github.android", "com.twitter.android", "org.telegram.messenger", "xyz.nextalone.nagram", "org.mozilla.firefox"));
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (!TARGET_PACKAGES.contains(lpparam.packageName)) {
             return;
         }
-        Log.i(TAG, "MFGA v1.3 (legacy) attach: " + lpparam.packageName);
+        Log.i(TAG, "MFGA v1.5 (legacy) attach: " + lpparam.packageName);
 
         XC_MethodHook replaceWithSystemFont = new XC_MethodHook() {
             @Override
