@@ -1,6 +1,7 @@
 package com.mfga.xposed.modern
 
 import android.graphics.Typeface
+import android.os.Build
 import android.util.Log
 import com.mfga.xposed.FontForceCore
 import io.github.libxposed.api.XposedModule
@@ -8,15 +9,12 @@ import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 
 private const val TAG = "MFGA"
-private const val FIREFOX_PACKAGE = "org.mozilla.firefox"
-private const val GECKO_CONFIG_PATH =
-    "/data/data/org.mozilla.firefox/files/mfga-geckoview-config.yaml"
 
 class ModernEntry : XposedModule() {
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         super.onPackageLoaded(param)
-        log(Log.INFO, TAG, "MFGA v1.5 (modern) attach: " + param.packageName)
+        log(Log.INFO, TAG, "MFGA v1.4 (modern) attach: " + param.packageName)
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
@@ -31,6 +29,8 @@ class ModernEntry : XposedModule() {
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.Builder#build failed: $it") }
 
         // 多字重 font-family 路径（比如 res/font/inter.xml 这种声明了 regular/medium
+        // 等多个字重变体的 family）：Android 29+ 上系统实际走的是
+        // Typeface.CustomFallbackBuilder#build()。
         runCatching {
             val fallbackBuilderClass =
                 Class.forName("android.graphics.Typeface\$CustomFallbackBuilder", false, cl)
@@ -41,65 +41,16 @@ class ModernEntry : XposedModule() {
         hookStaticFactory(cl, "createFromAsset")
         hookStaticFactory(cl, "createFromFile")
 
-        // Typeface hook 只管壳子 UI，网页正文走 Gecko 自己的排版管线，
-        // 需要另开一条路：通过 GeckoRuntimeSettings.Builder#configFilePath
-        // 强制 GeckoView 读取一份我们自己写的 prefs 文件。
-        if (param.packageName == FIREFOX_PACKAGE) {
-            hookGeckoFontPrefs(cl)
-        }
-    }
-
-    private fun hookGeckoFontPrefs(cl: ClassLoader) {
-        runCatching {
-            val builderClass =
-                Class.forName("org.mozilla.geckoview.GeckoRuntimeSettings\$Builder", false, cl)
-            val configFilePathMethod =
-                builderClass.getDeclaredMethod("configFilePath", String::class.java)
-            val buildMethod = builderClass.getDeclaredMethod("build")
-
-            deoptimize(buildMethod)
-            hook(buildMethod).intercept { chain ->
-                runCatching { writeGeckoConfigYaml() }
-                    .onFailure { log(Log.WARN, TAG, "write geckoview config failed: $it") }
-                runCatching {
-                    configFilePathMethod.isAccessible = true
-                    configFilePathMethod.invoke(chain.thisObject, GECKO_CONFIG_PATH)
-                }.onFailure { log(Log.WARN, TAG, "configFilePath invoke failed: $it") }
-                chain.proceed()
-            }
-            log(Log.INFO, TAG, "gecko font prefs hook installed, config = $GECKO_CONFIG_PATH")
-        }.onFailure { log(Log.WARN, TAG, "hook GeckoRuntimeSettings.Builder#build failed: $it") }
-    }
-
-    /**
-     * GeckoView 默认只在 release build 被设为 Android "debug app" 时才会读取这份
-     * config 文件；我们改成直接在 Builder#build() 前主动调用
-     * configFilePath(...)，就能绕开这个限制，不需要 adb / root 去 set-debug-app。
-     *
-     * browser.display.use_document_fonts = 0 让 Gecko 忽略网页自己指定的
-     * font-family/@font-face，强制回落到下面这些 font.name.* 指定的系统字体。
-     * 按 Gecko 的 font.language.group 分组，覆盖不全就加对应的 key。
-     */
-    private fun writeGeckoConfigYaml() {
-        val yaml = """
-            prefs:
-              browser.display.use_document_fonts: 0
-              font.default.zh-cn: "sans-serif"
-              font.name.serif.zh-cn: "Roboto"
-              font.name.sans-serif.zh-cn: "Roboto"
-              font.name.monospace.zh-cn: "monospace"
-              font.default.zh-tw: "sans-serif"
-              font.name.serif.zh-tw: "Roboto"
-              font.name.sans-serif.zh-tw: "Roboto"
-              font.default.zh-hk: "sans-serif"
-              font.name.serif.zh-hk: "Roboto"
-              font.name.sans-serif.zh-hk: "Roboto"
-              font.default.x-western: "sans-serif"
-              font.name.serif.x-western: "Roboto"
-              font.name.sans-serif.x-western: "Roboto"
-              font.name.monospace.x-western: "monospace"
-        """.trimIndent()
-        java.io.File(GECKO_CONFIG_PATH).writeText(yaml)
+        // === 兼容性补充 ===
+        // 新版 App 越来越多直接调用 Typeface.create(family, weight, italic) /
+        // Typeface.create(family, style) 这两个静态工厂来"从一个已有
+        // Typeface 派生出不同粗细/斜体的变体"，完全不经过上面几个入口。
+        // 如果派生用的 family 本身是一个在 hook 装上之前就已经创建好、
+        // 未被替换过的自定义字体（比如 App 用静态字段在类加载时就缓存好了），
+        // 这几个重载就会成为漏网之鱼——字体覆盖表现为"部分生效/部分失效"。
+        // 这里按 API level 分别挂上。
+        hookCreateWithWeight(cl)   // Typeface.create(Typeface, int weight, boolean italic) — API 28+
+        hookCreateWithStyle(cl)    // Typeface.create(Typeface, int style) — 所有版本都有
     }
 
     private fun hookStaticFactory(cl: ClassLoader, methodName: String) {
@@ -110,6 +61,31 @@ class ModernEntry : XposedModule() {
                 hookAndReplace(m)
             }
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.$methodName failed: $it") }
+    }
+
+    private fun hookCreateWithWeight(cl: ClassLoader) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            // Typeface.create(Typeface, int, boolean) 是 API 28 (P) 才加入的，
+            // 更老的系统上这个重载根本不存在，findMethod 会直接失败，跳过即可。
+            return
+        }
+        runCatching {
+            val typefaceClass = Class.forName("android.graphics.Typeface", false, cl)
+            val m = typefaceClass.getDeclaredMethod(
+                "create", typefaceClass, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType
+            )
+            hookAndReplace(m)
+        }.onFailure { log(Log.WARN, TAG, "hook Typeface.create(Typeface,int,boolean) failed: $it") }
+    }
+
+    private fun hookCreateWithStyle(cl: ClassLoader) {
+        runCatching {
+            val typefaceClass = Class.forName("android.graphics.Typeface", false, cl)
+            val m = typefaceClass.getDeclaredMethod(
+                "create", typefaceClass, Int::class.javaPrimitiveType
+            )
+            hookAndReplace(m)
+        }.onFailure { log(Log.WARN, TAG, "hook Typeface.create(Typeface,int) failed: $it") }
     }
 
     /** 统一的 hook 逻辑：deoptimize 绕过内联 + 把结果换成系统字体（保留原本 style/weight）。 */

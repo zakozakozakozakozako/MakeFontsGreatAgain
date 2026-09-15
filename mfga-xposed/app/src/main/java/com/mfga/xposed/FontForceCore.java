@@ -2,6 +2,10 @@ package com.mfga.xposed;
 
 import android.graphics.Typeface;
 import android.os.Build;
+import android.util.Log;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * legacy / modern 两套入口共用的核心逻辑。
@@ -16,11 +20,37 @@ import android.os.Build;
  *
  * 注意：Typeface.create(...) 内部在部分 Android 版本上也可能间接
  * 走回 Builder，为避免无限递归，用 ThreadLocal 做重入保护。
+ *
+ * === 兼容性说明 ===
+ * 新版 App(如 TikTok 新版)大量改用"可变字体"(variable font)的
+ * wght 轴来精细调粗细，而不是老式的离散 weight 整数。这带来两个问题：
+ *
+ * 1) Typeface#getWeight() 在纯靠 setFontVariationSettings() 设置的
+ *    Typeface 上经常拿不到真实值(可能是 -1 / 默认 400)，必须优先解析
+ *    getFontVariationSettings() 里的 'wght' 轴值。
+ *
+ * 2) 即使权重读对了，把任意 weight 整数直接丢给
+ *    Typeface.create(family, weight, italic) 在"family 不是真正可变
+ *    字体、只是几套离散静态 TTF"(绝大多数系统字体，包括多数 OEM
+ *    定制字体，如 ColorOS/HyperOS/OxygenOS 系统字体)的情况下，
+ *    系统会做"伪粗体"(faux bold)合成来凑数——请求的 weight 在该
+ *    family 里没有精确对应的静态文件时尤其明显，笔画会被机械加粗/
+ *    变形，中文字形尤其容易发糊，这正是"奇怪字重"的来源。
+ *
+ * 因此这里不再无脑传 weight 给 Typeface.create(family, weight, italic)，
+ * 而是把解析出来的真实 weight 量化到系统里真实存在、不会触发伪粗体
+ * 合成的几档命名字重(sans-serif / sans-serif-medium / sans-serif-black)。
+ * 各 API level 上不可用的字段/方法都做了版本判断，兜底路径全程不会崩溃。
  */
 public final class FontForceCore {
 
+    private static final String TAG = "MFGA";
+
     private static final ThreadLocal<Boolean> IN_REPLACEMENT =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    private static final Pattern WGHT_PATTERN =
+            Pattern.compile("'wght'\\s*(\\d+(?:\\.\\d+)?)");
 
     private FontForceCore() {
     }
@@ -38,12 +68,13 @@ public final class FontForceCore {
         IN_REPLACEMENT.set(Boolean.TRUE);
         try {
             int style = original != null ? original.getStyle() : Typeface.NORMAL;
+            boolean italic = isItalicSafe(original);
+            int weight = resolveIntendedWeight(original);
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && original != null) {
-                int weight = original.getWeight();
-                boolean italic = original.isItalic();
-                if (weight > 0) {
-                    return Typeface.create(Typeface.DEFAULT, weight, italic);
+            if (weight > 0) {
+                Typeface bucketed = bucketedFamilyReplacement(weight, italic, style);
+                if (bucketed != null) {
+                    return bucketed;
                 }
             }
             return Typeface.create(Typeface.DEFAULT, style);
@@ -52,6 +83,88 @@ public final class FontForceCore {
             return Typeface.DEFAULT;
         } finally {
             IN_REPLACEMENT.set(Boolean.FALSE);
+        }
+    }
+
+    /**
+     * 优先从 getFontVariationSettings() 里解析真实的 'wght' 轴值
+     * (API 26+)，因为它比 getWeight()(API 28+，且对纯 variation
+     * 方式设置的字体经常不准)更能反映调用方真实想要的粗细。
+     * 两者都拿不到时返回 -1，由调用方走 style 兜底。
+     */
+    private static int resolveIntendedWeight(Typeface original) {
+        if (original == null) {
+            return -1;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                String variationSettings = original.getFontVariationSettings();
+                if (variationSettings != null && !variationSettings.isEmpty()) {
+                    Matcher m = WGHT_PATTERN.matcher(variationSettings);
+                    if (m.find()) {
+                        return Math.round(Float.parseFloat(m.group(1)));
+                    }
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "parse getFontVariationSettings failed", t);
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                int weight = original.getWeight();
+                if (weight > 0) {
+                    return weight;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "getWeight failed", t);
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isItalicSafe(Typeface original) {
+        if (original == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                return original.isItalic();
+            } catch (Throwable ignored) {
+                // fall through to style-based check below
+            }
+        }
+        return (original.getStyle() & Typeface.ITALIC) != 0;
+    }
+
+    /**
+     * 把任意 weight 量化到系统里"确定存在静态字重文件、不会触发
+     * 伪粗体合成"的几档命名字重，而不是直接把 weight 整数塞给
+     * Typeface.create(family, weight, italic)。
+     *
+     * 未知 family 名字在各 Android 版本上的行为是回退到默认字体而
+     * 不是抛异常/返回 null，但这里仍然做了防御性判断，避免极少数
+     * 定制 ROM 上出现异常行为时波及调用方。
+     */
+    private static Typeface bucketedFamilyReplacement(int weight, boolean italic, int style) {
+        String familyName = weight >= 650 ? "sans-serif-black"
+                : weight >= 550 ? "sans-serif-medium"
+                : "sans-serif";
+        int wantStyle = italic ? Typeface.ITALIC : Typeface.NORMAL;
+        try {
+            Typeface bucketed = Typeface.create(familyName, wantStyle);
+            if (bucketed != null) {
+                return bucketed;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "create(familyName=" + familyName + ") failed", t);
+        }
+        // 命名字重在这台设备/这个 App 进程里不可用，退回最基础的
+        // style 兜底，绝不使用 Typeface.create(family, weight, italic)
+        // 的任意 weight 合成，避免伪粗体。
+        try {
+            return Typeface.create(Typeface.DEFAULT, style);
+        } catch (Throwable t) {
+            return Typeface.DEFAULT;
         }
     }
 }

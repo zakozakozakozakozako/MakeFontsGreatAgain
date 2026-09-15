@@ -10,8 +10,8 @@ android {
     defaultConfig {
         applicationId = "com.mfga.xposed"
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.5"
+        versionCode = 14
+        versionName = "1.4"
     }
 
     buildTypes {
