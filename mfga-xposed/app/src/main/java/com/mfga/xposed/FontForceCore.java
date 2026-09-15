@@ -4,9 +4,6 @@ import android.graphics.Typeface;
 import android.os.Build;
 import android.util.Log;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /**
  * legacy / modern 两套入口共用的核心逻辑。
  *
@@ -28,9 +25,6 @@ public final class FontForceCore {
 
     private static final ThreadLocal<Boolean> IN_REPLACEMENT =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
-
-    private static final Pattern WGHT_PATTERN =
-            Pattern.compile("'wght'\\s*(\\d+(?:\\.\\d+)?)");
 
     private FontForceCore() {
     }
@@ -67,27 +61,12 @@ public final class FontForceCore {
     }
 
     /**
-     * 优先从 getFontVariationSettings() 里解析真实的 'wght' 轴值
-     * (API 26+)，因为它比 getWeight()(API 28+，且对纯 variation
-     * 方式设置的字体经常不准)更能反映调用方真实想要的粗细。
-     * 两者都拿不到时返回 -1，由调用方走 style 兜底。
+     * 读取真实的 weight。getWeight() 是 API 28(P)才加入的公开方法，
+     * 更早的系统上直接跳过，交给调用方走 style 兜底。
      */
     private static int resolveIntendedWeight(Typeface original) {
         if (original == null) {
             return -1;
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                String variationSettings = original.getFontVariationSettings();
-                if (variationSettings != null && !variationSettings.isEmpty()) {
-                    Matcher m = WGHT_PATTERN.matcher(variationSettings);
-                    if (m.find()) {
-                        return Math.round(Float.parseFloat(m.group(1)));
-                    }
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "parse getFontVariationSettings failed", t);
-            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {

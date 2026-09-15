@@ -24,7 +24,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets["main"].resources.srcDirs("src/main/resources")
+    sourceSets["main"].resources.directories.add("src/main/resources")
 }
 
 kotlin {
