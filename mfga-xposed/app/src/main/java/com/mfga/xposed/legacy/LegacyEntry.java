@@ -36,7 +36,7 @@ public class LegacyEntry implements IXposedHookLoadPackage {
         if (!TARGET_PACKAGES.contains(lpparam.packageName)) {
             return;
         }
-        Log.i(TAG, "MFGA v1.6 (legacy) attach: " + lpparam.packageName);
+        Log.i(TAG, "MFGA v1.7 (legacy) attach: " + lpparam.packageName);
 
         ClassLoader cl = lpparam.classLoader;
 
@@ -101,7 +101,7 @@ public class LegacyEntry implements IXposedHookLoadPackage {
             Log.w(TAG, "hook Typeface.create(Typeface,int) failed", t);
         }
 
-        Log.i(TAG, "MFGA v1.6 hook installation finished for " + lpparam.packageName);
+        Log.i(TAG, "MFGA v1.7 hook installation finished for " + lpparam.packageName);
     }
 
     /** 给每个 hook 点单独建一个 XC_MethodHook，带命中日志（限速）+ 调用栈。 */

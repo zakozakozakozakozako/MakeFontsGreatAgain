@@ -23,7 +23,7 @@ class ModernEntry : XposedModule() {
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         super.onPackageLoaded(param)
-        log(Log.INFO, TAG, "MFGA v1.6 (modern) attach: " + param.packageName)
+        log(Log.INFO, TAG, "MFGA v1.7 (modern) attach: " + param.packageName)
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
@@ -55,7 +55,7 @@ class ModernEntry : XposedModule() {
         hookCreateWithWeight(cl)   // Typeface.create(Typeface, int weight, boolean italic) — API 28+
         hookCreateWithStyle(cl)    // Typeface.create(Typeface, int style)
 
-        log(Log.INFO, TAG, "MFGA v1.6 hook installation finished for " + param.packageName)
+        log(Log.INFO, TAG, "MFGA v1.7 hook installation finished for " + param.packageName)
     }
 
     private fun hookStaticFactory(cl: ClassLoader, methodName: String) {

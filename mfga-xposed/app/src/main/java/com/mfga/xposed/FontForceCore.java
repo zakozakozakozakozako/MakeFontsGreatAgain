@@ -97,25 +97,47 @@ public final class FontForceCore {
 
     /**
      * 把任意 weight 量化到系统里"确定存在静态字重文件、不会触发
-     * 伪粗体合成"的几档命名字重，而不是直接把 weight 整数塞给
+     * 伪粗体合成"的几档字重，而不是直接把 weight 整数塞给
      * Typeface.create(family, weight, italic)。
      *
-     * 未知 family 名字在各 Android 版本上的行为是回退到默认字体而
-     * 不是抛异常/返回 null，但这里仍然做了防御性判断，避免极少数
-     * 定制 ROM 上出现异常行为时波及调用方。
+     * 档位对齐真实的常见设计字重，而不是随手拍的数字：
+     *   [0, 450)   -> "sans-serif"        常规 (~400)
+     *   [450, 550) -> "sans-serif-medium" 中等 (~500)
+     *   [550, 850) -> Typeface.BOLD style 粗体 (~700)——用 style 而不是
+     *                 命名 family，因为几乎所有系统字体都把"粗体"实现成
+     *                 一个真实的静态字重文件、通过 style 位而不是 family
+     *                 名字去选，兼容性比 "sans-serif-medium"/"-black" 这类
+     *                 命名 family(不是所有 OEM 字体配置都声明)要好。
+     *   [850, +∞)  -> "sans-serif-black"  特黑 (~900)
+     *
+     * 之前的版本把 700(最常见的 bold 请求)和 900(black)都落进了同一个
+     * ">=650 -> sans-serif-black" 档，导致本该有明显粗细区别的两种文字
+     * 被拍成了一样重，这正是"奇怪字重"没消失的直接原因。
      */
     private static Typeface bucketedFamilyReplacement(int weight, boolean italic, int style) {
-        String familyName = weight >= 650 ? "sans-serif-black"
-                : weight >= 550 ? "sans-serif-medium"
-                : "sans-serif";
         int wantStyle = italic ? Typeface.ITALIC : Typeface.NORMAL;
-        try {
-            Typeface bucketed = Typeface.create(familyName, wantStyle);
-            if (bucketed != null) {
-                return bucketed;
+
+        if (weight >= 550 && weight < 850) {
+            // 700 附近（最常见的 "bold" 请求）：用 BOLD style 而不是命名
+            // family，走系统字体真实的粗体静态文件，不经过伪粗体合成。
+            int boldStyle = italic ? Typeface.BOLD_ITALIC : Typeface.BOLD;
+            try {
+                return Typeface.create(Typeface.DEFAULT, boldStyle);
+            } catch (Throwable t) {
+                Log.w(TAG, "create(DEFAULT, BOLD) failed", t);
             }
-        } catch (Throwable t) {
-            Log.w(TAG, "create(familyName=" + familyName + ") failed", t);
+        } else {
+            String familyName = weight >= 850 ? "sans-serif-black"
+                    : weight >= 450 ? "sans-serif-medium"
+                    : "sans-serif";
+            try {
+                Typeface bucketed = Typeface.create(familyName, wantStyle);
+                if (bucketed != null) {
+                    return bucketed;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "create(familyName=" + familyName + ") failed", t);
+            }
         }
         // 命名字重在这台设备/这个 App 进程里不可用，退回最基础的
         // style 兜底，绝不使用 Typeface.create(family, weight, italic)
