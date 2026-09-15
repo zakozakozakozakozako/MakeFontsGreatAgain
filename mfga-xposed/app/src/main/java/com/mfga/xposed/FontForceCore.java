@@ -21,26 +21,6 @@ import java.util.regex.Pattern;
  * 注意：Typeface.create(...) 内部在部分 Android 版本上也可能间接
  * 走回 Builder，为避免无限递归，用 ThreadLocal 做重入保护。
  *
- * === 兼容性说明 ===
- * 新版 App(如 TikTok 新版)大量改用"可变字体"(variable font)的
- * wght 轴来精细调粗细，而不是老式的离散 weight 整数。这带来两个问题：
- *
- * 1) Typeface#getWeight() 在纯靠 setFontVariationSettings() 设置的
- *    Typeface 上经常拿不到真实值(可能是 -1 / 默认 400)，必须优先解析
- *    getFontVariationSettings() 里的 'wght' 轴值。
- *
- * 2) 即使权重读对了，把任意 weight 整数直接丢给
- *    Typeface.create(family, weight, italic) 在"family 不是真正可变
- *    字体、只是几套离散静态 TTF"(绝大多数系统字体，包括多数 OEM
- *    定制字体，如 ColorOS/HyperOS/OxygenOS 系统字体)的情况下，
- *    系统会做"伪粗体"(faux bold)合成来凑数——请求的 weight 在该
- *    family 里没有精确对应的静态文件时尤其明显，笔画会被机械加粗/
- *    变形，中文字形尤其容易发糊，这正是"奇怪字重"的来源。
- *
- * 因此这里不再无脑传 weight 给 Typeface.create(family, weight, italic)，
- * 而是把解析出来的真实 weight 量化到系统里真实存在、不会触发伪粗体
- * 合成的几档命名字重(sans-serif / sans-serif-medium / sans-serif-black)。
- * 各 API level 上不可用的字段/方法都做了版本判断，兜底路径全程不会崩溃。
  */
 public final class FontForceCore {
 

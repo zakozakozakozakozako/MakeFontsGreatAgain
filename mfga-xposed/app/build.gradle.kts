@@ -5,13 +5,13 @@ plugins {
 
 android {
     namespace = "com.mfga.xposed"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.mfga.xposed"
-        targetSdk = 36
-        versionCode = 14
-        versionName = "1.4"
+        targetSdk = 37
+        versionCode = 15
+        versionName = "1.5"
     }
 
     buildTypes {

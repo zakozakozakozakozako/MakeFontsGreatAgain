@@ -40,17 +40,8 @@ class ModernEntry : XposedModule() {
         // 兜底静态工厂方法
         hookStaticFactory(cl, "createFromAsset")
         hookStaticFactory(cl, "createFromFile")
-
-        // === 兼容性补充 ===
-        // 新版 App 越来越多直接调用 Typeface.create(family, weight, italic) /
-        // Typeface.create(family, style) 这两个静态工厂来"从一个已有
-        // Typeface 派生出不同粗细/斜体的变体"，完全不经过上面几个入口。
-        // 如果派生用的 family 本身是一个在 hook 装上之前就已经创建好、
-        // 未被替换过的自定义字体（比如 App 用静态字段在类加载时就缓存好了），
-        // 这几个重载就会成为漏网之鱼——字体覆盖表现为"部分生效/部分失效"。
-        // 这里按 API level 分别挂上。
         hookCreateWithWeight(cl)   // Typeface.create(Typeface, int weight, boolean italic) — API 28+
-        hookCreateWithStyle(cl)    // Typeface.create(Typeface, int style) — 所有版本都有
+        hookCreateWithStyle(cl)    // Typeface.create(Typeface, int style)
     }
 
     private fun hookStaticFactory(cl: ClassLoader, methodName: String) {
@@ -66,7 +57,7 @@ class ModernEntry : XposedModule() {
     private fun hookCreateWithWeight(cl: ClassLoader) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             // Typeface.create(Typeface, int, boolean) 是 API 28 (P) 才加入的，
-            // 更老的系统上这个重载根本不存在，findMethod 会直接失败，跳过即可。
+            // 更老的系统上这个重载根本不存在，findMethod 会直接失败，跳过。
             return
         }
         runCatching {
