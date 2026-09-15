@@ -7,14 +7,23 @@ import com.mfga.xposed.FontForceCore
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "MFGA"
 
+// 每个 hook 点最多打这么多条命中日志，防止字体方法被高频调用时把
+// LSPosed 日志刷爆（尤其是列表页滚动时，Typeface 相关方法可能每秒
+// 被调用几十上百次）。
+private const val MAX_HIT_LOGS_PER_METHOD = 20
+
 class ModernEntry : XposedModule() {
+
+    private val hitCounters = ConcurrentHashMap<String, AtomicInteger>()
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         super.onPackageLoaded(param)
-        log(Log.INFO, TAG, "MFGA v1.5 (modern) attach: " + param.packageName)
+        log(Log.INFO, TAG, "MFGA v1.6 (modern) attach: " + param.packageName)
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
@@ -25,7 +34,7 @@ class ModernEntry : XposedModule() {
         // 单字体文件路径：createFromAsset / createFromFile 内部走 Typeface.Builder#build()
         runCatching {
             val builderClass = Class.forName("android.graphics.Typeface\$Builder", false, cl)
-            hookAndReplace(builderClass.getDeclaredMethod("build"))
+            hookAndReplace("Typeface.Builder#build", builderClass.getDeclaredMethod("build"))
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.Builder#build failed: $it") }
 
         // 多字重 font-family 路径（比如 res/font/inter.xml 这种声明了 regular/medium
@@ -34,7 +43,10 @@ class ModernEntry : XposedModule() {
         runCatching {
             val fallbackBuilderClass =
                 Class.forName("android.graphics.Typeface\$CustomFallbackBuilder", false, cl)
-            hookAndReplace(fallbackBuilderClass.getDeclaredMethod("build"))
+            hookAndReplace(
+                "Typeface.CustomFallbackBuilder#build",
+                fallbackBuilderClass.getDeclaredMethod("build")
+            )
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.CustomFallbackBuilder#build failed: $it") }
 
         // 兜底静态工厂方法
@@ -42,6 +54,8 @@ class ModernEntry : XposedModule() {
         hookStaticFactory(cl, "createFromFile")
         hookCreateWithWeight(cl)   // Typeface.create(Typeface, int weight, boolean italic) — API 28+
         hookCreateWithStyle(cl)    // Typeface.create(Typeface, int style)
+
+        log(Log.INFO, TAG, "MFGA v1.6 hook installation finished for " + param.packageName)
     }
 
     private fun hookStaticFactory(cl: ClassLoader, methodName: String) {
@@ -49,7 +63,7 @@ class ModernEntry : XposedModule() {
             val typefaceClass = Class.forName("android.graphics.Typeface", false, cl)
             for (m in typefaceClass.declaredMethods) {
                 if (m.name != methodName) continue
-                hookAndReplace(m)
+                hookAndReplace("Typeface.$methodName", m)
             }
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.$methodName failed: $it") }
     }
@@ -65,7 +79,7 @@ class ModernEntry : XposedModule() {
             val m = typefaceClass.getDeclaredMethod(
                 "create", typefaceClass, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType
             )
-            hookAndReplace(m)
+            hookAndReplace("Typeface.create(Typeface,int,boolean)", m)
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.create(Typeface,int,boolean) failed: $it") }
     }
 
@@ -75,19 +89,52 @@ class ModernEntry : XposedModule() {
             val m = typefaceClass.getDeclaredMethod(
                 "create", typefaceClass, Int::class.javaPrimitiveType
             )
-            hookAndReplace(m)
+            hookAndReplace("Typeface.create(Typeface,int)", m)
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.create(Typeface,int) failed: $it") }
     }
 
     /** 统一的 hook 逻辑：deoptimize 绕过内联 + 把结果换成系统字体（保留原本 style/weight）。 */
-    private fun hookAndReplace(m: java.lang.reflect.Executable) {
+    private fun hookAndReplace(label: String, m: java.lang.reflect.Executable) {
         deoptimize(m)
         hook(m).intercept { chain ->
             if (FontForceCore.isReplacing()) {
                 return@intercept chain.proceed()
             }
             val original = chain.proceed() as? Typeface
-            FontForceCore.systemReplacementFor(original)
+            val replacement = FontForceCore.systemReplacementFor(original)
+            logHit(label, original, replacement)
+            replacement
         }
+    }
+
+    private fun logHit(label: String, original: Typeface?, replacement: Typeface?) {
+        val counter = hitCounters.computeIfAbsent(label) { AtomicInteger(0) }
+        val n = counter.incrementAndGet()
+        if (n > MAX_HIT_LOGS_PER_METHOD) {
+            if (n == MAX_HIT_LOGS_PER_METHOD + 1) {
+                log(Log.INFO, TAG, "[$label] 已达 $MAX_HIT_LOGS_PER_METHOD 条命中日志上限，后续不再打印")
+            }
+            return
+        }
+        val weight = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && original != null) {
+            runCatching { original.weight }.getOrDefault(-1)
+        } else -1
+        val style = original?.style ?: -1
+        // 只保留调用栈里 app 自己 / TikTok 的帧，跳过 Xposed 桥接和 Android 框架
+        // 自身的帧，方便直接定位是哪个类在请求字体。
+        val callerFrames = Thread.currentThread().stackTrace
+            .drop(1)
+            .filterNot {
+                it.className.startsWith("com.mfga.xposed") ||
+                    it.className.startsWith("android.graphics.Typeface") ||
+                    it.className.startsWith("io.github.libxposed") ||
+                    it.className.startsWith("java.lang.Thread")
+            }
+            .take(4)
+            .joinToString(" <- ") { "${it.className}.${it.methodName}" }
+        log(
+            Log.INFO, TAG,
+            "[$label] hit #$n weight=$weight style=$style -> replaced=${replacement != null}; caller: $callerFrames"
+        )
     }
 }
