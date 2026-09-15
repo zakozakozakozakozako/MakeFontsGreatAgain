@@ -26,7 +26,7 @@ public class LegacyEntry implements IXposedHookLoadPackage {
         if (!TARGET_PACKAGES.contains(lpparam.packageName)) {
             return;
         }
-        Log.i(TAG, "MFGA v1.4 (legacy) attach: " + lpparam.packageName);
+        Log.i(TAG, "MFGA v1.5 (legacy) attach: " + lpparam.packageName);
 
         XC_MethodHook replaceWithSystemFont = new XC_MethodHook() {
             @Override

@@ -14,7 +14,7 @@ class ModernEntry : XposedModule() {
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         super.onPackageLoaded(param)
-        log(Log.INFO, TAG, "MFGA v1.4 (modern) attach: " + param.packageName)
+        log(Log.INFO, TAG, "MFGA v1.5 (modern) attach: " + param.packageName)
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
