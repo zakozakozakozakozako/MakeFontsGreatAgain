@@ -26,7 +26,37 @@ public final class FontForceCore {
     private static final ThreadLocal<Boolean> IN_REPLACEMENT =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
 
+    /**
+     * 由 Font.Builder#setFontVariationSettings(String) 的 hook 写入的 wght 值。
+     * 有些 App 只通过变量字体轴指定字重，全程不调用 setWeight()，
+     * 此时 Typeface#getWeight() 读到的是字体文件默认字重，不可靠。
+     */
+    private static final ThreadLocal<Integer> PENDING_VARIATION_WEIGHT = new ThreadLocal<>();
+
+    private static final java.util.regex.Pattern WGHT_PATTERN =
+            java.util.regex.Pattern.compile("wght['\"]?\\s+(\\d+(?:\\.\\d+)?)");
+
     private FontForceCore() {
+    }
+
+    /** hook Font.Builder#setFontVariationSettings(String) 时回调，仅窥探参数，不改变行为。 */
+    public static void noteFontVariationSettings(String settings) {
+        if (settings == null) {
+            return;
+        }
+        java.util.regex.Matcher m = WGHT_PATTERN.matcher(settings);
+        if (m.find()) {
+            try {
+                int w = (int) Math.round(Double.parseDouble(m.group(1)));
+                if (w > 0) {
+                    PENDING_VARIATION_WEIGHT.set(w);
+                    Log.d(TAG, "captured wght=" + w + " from \"" + settings + "\"");
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        } else {
+            Log.d(TAG, "setFontVariationSettings without wght: \"" + settings + "\"");
+        }
     }
 
     /** 是否正处于"生成替换字体"的过程中，用来防止 hook 自我递归。 */
@@ -65,6 +95,13 @@ public final class FontForceCore {
      * 更早的系统上直接跳过，交给调用方走 style 兜底。
      */
     private static int resolveIntendedWeight(Typeface original) {
+        Integer pending = PENDING_VARIATION_WEIGHT.get();
+        if (pending != null) {
+            PENDING_VARIATION_WEIGHT.remove();
+            if (pending > 0) {
+                return pending;
+            }
+        }
         if (original == null) {
             return -1;
         }

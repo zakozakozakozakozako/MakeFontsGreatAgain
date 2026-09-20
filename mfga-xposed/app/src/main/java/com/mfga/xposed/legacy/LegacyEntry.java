@@ -64,6 +64,21 @@ public class LegacyEntry implements IXposedHookLoadPackage {
             Log.w(TAG, "hook Typeface.CustomFallbackBuilder#build failed", t);
         }
 
+        // 变量字体路径：只窥探 wght 参数(不改变行为)，供 resolveIntendedWeight 兜底使用
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "android.graphics.fonts.Font$Builder", cl,
+                    "setFontVariationSettings", String.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            FontForceCore.noteFontVariationSettings((String) param.args[0]);
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "hook Font.Builder#setFontVariationSettings failed", t);
+        }
+
         // 兜底：部分老代码路径可能不经过 Builder，直接补几个静态工厂方法
         try {
             XposedHelpers.findAndHookMethod(

@@ -37,6 +37,17 @@ class ModernEntry : XposedModule() {
             hookAndReplace(fallbackBuilderClass.getDeclaredMethod("build"))
         }.onFailure { log(Log.WARN, TAG, "hook Typeface.CustomFallbackBuilder#build failed: $it") }
 
+        // 变量字体路径：只窥探 wght 参数(不改变行为)，供 resolveIntendedWeight 兜底使用
+        runCatching {
+            val fontBuilderClass = Class.forName("android.graphics.fonts.Font\$Builder", false, cl)
+            val m = fontBuilderClass.getDeclaredMethod("setFontVariationSettings", String::class.java)
+            deoptimize(m)
+            hook(m).intercept { chain ->
+                FontForceCore.noteFontVariationSettings(chain.args.getOrNull(0) as? String)
+                chain.proceed()
+            }
+        }.onFailure { log(Log.WARN, TAG, "hook Font.Builder#setFontVariationSettings failed: $it") }
+
         // 兜底静态工厂方法
         hookStaticFactory(cl, "createFromAsset")
         hookStaticFactory(cl, "createFromFile")
